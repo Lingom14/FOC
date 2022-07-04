@@ -1,0 +1,47 @@
+---
+name: Shiftleft Scan
+"on":
+- workflow_dispatch
+- pull_request
+jobs:
+  scanning:
+    env:
+      APP_ID: eb14de196e05375d3ffb4155efdf40867f168252abeeaa9eed228fd01d1f7bf2
+      BRANCH_NAME: master
+      SCAN_ID: 671e2ec6a5d327f8c09bb54544deff9835c837fb71aa6e94884ced1059cedddc
+      REQ_URL_MAP: "${{toJSON('{\"SL_API_HOST\":\"https://slapi.dev.securin.io\",\"\
+        SL_RESULT_API_HOST\":\"https://slresultapi.dev.securin.io\",\"SL_RESULTPARSER_API_HOST\"\
+        :\"https://slresultparserapi.dev.securin.io\"}')}}"
+    steps:
+    - name: Retrieve Token Info
+      id: auth_token
+      run: "respJson=$(curl --location --request GET 'https://slresultapi.dev.securin.io/aws/ecr/token'\
+        \  --header 'Authorization: Bearer ${{secrets.CLI_ACCESS_TOKEN}}'  --data-raw\
+        \ ' ' )\necho \"::set-output name=authTokenJson::$respJson\""
+    - uses: actions/checkout@v2
+    - name: Scan Initiated
+      id: sec_scan_init
+      run: "usrVal=$(echo '${{fromJson(steps.auth_token.outputs.authTokenJson).user}}'\
+        \ | openssl enc -aes-256-cbc -d -a -K ${{secrets.ENC_KEY}} -iv ${{secrets.ENC_IV}}\
+        \ ) \nusrPassword=$(echo '${{fromJson(steps.auth_token.outputs.authTokenJson).password}}'\
+        \ | openssl enc -aes-256-cbc -d -base64 -A -K ${{secrets.ENC_KEY}} -iv ${{secrets.ENC_IV}}\
+        \ ) \nusrPrxyUrl=$(echo '${{fromJson(steps.auth_token.outputs.authTokenJson).proxyUrl}}'\
+        \ | openssl enc -aes-256-cbc -d -a -K ${{secrets.ENC_KEY}} -iv ${{secrets.ENC_IV}}\
+        \ ) \nusrImgTag=$(echo '${{fromJson(steps.auth_token.outputs.authTokenJson).imageTag}}'\
+        \ | openssl enc -aes-256-cbc -d -a -K ${{secrets.ENC_KEY}} -iv ${{secrets.ENC_IV}}\
+        \ ) \ndocker login --username  $usrVal --password $usrPassword $usrPrxyUrl\
+        \ \ndocker pull -q $usrImgTag \ndocker run -v ${{github.workspace}}:/src \
+        \ --volume ${{github.workspace}}:/workdir -v /var/run/docker.sock:/var/run/docker.sock\
+        \ $usrImgTag -access_tkn ${{secrets.CLI_ACCESS_TOKEN}} -app_id ${{ env.APP_ID\
+        \ }} -scan_id ${{ env.SCAN_ID }} -branch_name ${{ env.BRANCH_NAME }} -req_url_map\
+        \ ${{ env.REQ_URL_MAP }} event:${{ github.event_name }}  pr_number:${{ github.event.number\
+        \ }}"
+    - name: Upload SARIF file
+      uses: github/codeql-action/upload-sarif@v1
+      with:
+        sarif_file: "${{github.workspace}}/results/result.sarif"
+      if: hashFiles('**/result.sarif') !=''
+    - name: Evaluate build status
+      run: "cat ${{github.workspace}}/results/status.txt\nexit 1\n"
+      if: hashFiles('**/status.txt') !=''
+    runs-on: ubuntu-latest
